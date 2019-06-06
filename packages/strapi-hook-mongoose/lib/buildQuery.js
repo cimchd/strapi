@@ -5,7 +5,7 @@ const utils = require('./utils')();
  * Build a mongo query
  * @param {Object} options - Query options
  * @param {Object} options.model - The model you are querying
- * @param {Object} options.filers - An object with the possible filters (start, limit, sort, where)
+ * @param {Object} options.filters - An object with the possible filters (start, limit, sort, where)
  * @param {Object} options.populate - An array of paths to populate
  * @param {boolean} options.aggregate - Force aggregate function to use group by feature
  */
@@ -27,17 +27,93 @@ const buildQuery = ({
 };
 
 /**
+ * Return the operator for the search part of a query
+ *
+ * @param type
+ * @param value
+ * @return {string}
+ */
+const getSearchFieldOperator = function(type, value) {
+  let operator = "ignore"; // types that are not suitable for search
+  switch (type) {
+    case "biginteger":
+    case "integer":
+    case "float":
+    case "decimal":
+      if (_.isNaN(_.toNumber(value))) {
+        operator = "ignore"; // value is not numeric
+      } else {
+        operator = "eq";
+      }
+      break;
+    case "string":
+    case "text":
+    case "password":
+    case "enumeration":
+    case "email":
+      operator = "contains";
+      break;
+    case "boolean":
+      if (value === "true" && value === "false") {
+        operator = "eq";
+      }
+      break;
+    case "binary":
+      if (value === '1' && value === '0') {
+        operator = "eq";
+      }
+      break;
+  }
+  return operator;
+};
+
+/**
+ * Return the find criteria for a simple query
+ * @param {Object} model - The model to execute the find method on
+ * @param {Object} filters - An object with the possible filters (start, limit, sort, where)
+ */
+const getFindCriteria = (model, filters) => {
+  const { where = [] } = filters;
+  let whereSearch = {};
+
+  // Handle special search attribute "_q"
+  const searchObject = where.find(item => item.field === '_q' );
+  if (searchObject) {
+    const fields = Object.keys(model.attributes);
+    whereSearch = {
+      $or: fields.map((field) => {
+        // get operator by field type and value
+        const operator = getSearchFieldOperator(model.attributes[field].type, searchObject.value);
+        if (operator === 'ignore') {
+          return null;
+        }
+        return buildWhereClause({ field, operator, value: searchObject.value });
+
+      }).filter(item => item !== null && item !== undefined)
+    };
+    // Remove search entry from where
+    const searchIndex = where.findIndex(item => item.field === '_q' );
+    where.splice(searchIndex, 1);
+  }
+
+  // Build object for find method and return it
+  const wheres = where.map(buildWhereClause);
+  const findCriteria = {
+    ...whereSearch,
+    ...(wheres.length > 0 ? { $and: wheres } : {})
+  };
+  return findCriteria;
+};
+
+/**
  * Builds a simple find query when there are no deep filters
  * @param {Object} options - Query options
  * @param {Object} options.model - The model you are querying
- * @param {Object} options.filers - An object with the possible filters (start, limit, sort, where)
+ * @param {Object} options.filters - An object with the possible filters (start, limit, sort, where)
  * @param {Object} options.populate - An array of paths to populate
  */
 const buildSimpleQuery = ({ model, filters, populate }) => {
-  const { where = [] } = filters;
-
-  const wheres = where.map(buildWhereClause);
-  const findCriteria = wheres.length > 0 ? { $and: wheres } : {};
+  const findCriteria = getFindCriteria(model, filters);
 
   let query = model.find(findCriteria).populate(populate);
   query = applyQueryParams({ query, filters });
@@ -54,7 +130,7 @@ const buildSimpleQuery = ({ model, filters, populate }) => {
  * Builds a deep aggregate query when there are deep filters
  * @param {Object} options - Query options
  * @param {Object} options.model - The model you are querying
- * @param {Object} options.filers - An object with the possible filters (start, limit, sort, where)
+ * @param {Object} options.filters - An object with the possible filters (start, limit, sort, where)
  * @param {Object} options.populate - An array of paths to populate
  */
 const buildDeepQuery = ({ model, filters, populate }) => {
@@ -379,7 +455,7 @@ const formatValue = value => utils.valueToId(value);
  * @param {*} options.value - Where clause alue
  */
 const buildWhereClause = ({ field, operator, value }) => {
-  if (Array.isArray(value) && !['in', 'nin'].includes(operator)) {
+  if (Array.isArray(value) && !['in', 'nin', 'or'].includes(operator)) {
     return {
       $or: value.map(val => buildWhereClause({ field, operator, value: val })),
     };
@@ -400,6 +476,8 @@ const buildWhereClause = ({ field, operator, value }) => {
       return { [field]: { $gt: val } };
     case 'gte':
       return { [field]: { $gte: val } };
+    case 'or':
+      return { $or: Array.isArray(val) ? val : [val] }; // this should do the trick
     case 'in':
       return {
         [field]: {
