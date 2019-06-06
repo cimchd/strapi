@@ -31,12 +31,21 @@ module.exports = ({ model, modelKey, strapi }) => {
         .populate(populateOpt);
     },
 
-    count(params) {
-      const filters = convertRestQueryParams(params);
+    count(params, limited = false) {
+      let filterParams = convertRestQueryParams(params);
+
+      // Only use where filter by default.
+      const filters = {where: filterParams.where};
+
+      // Limit the result if needed (e.g. for GraphQL count aggregator).
+      if (limited) {
+        filters.start = filterParams.start;
+        filters.limit = filterParams.limit;
+      }
 
       return buildQuery({
         model,
-        filters: { where: filters.where },
+        filters,
       }).count();
     },
 
@@ -106,8 +115,18 @@ module.exports = ({ model, modelKey, strapi }) => {
       return data;
     },
 
+    /**
+     * DEPRECATED - for compatibility reasons only, use find instead, that handles the _q search parameter now
+     *
+     * Promise to search a/an <%= id %>.
+     *
+     * @return {Promise}
+     */
     search(params, populate) {
-      // Convert `params` object to filters compatible with Mongo.
+      // Call fetchAll
+      return module.exports.find(params, populate);
+
+/*      // Convert `params` object to filters compatible with Mongo.
       const filters = strapi.utils.models.convertParams(modelKey, params);
 
       const $or = buildSearchOr(model, params._q);
@@ -117,17 +136,18 @@ module.exports = ({ model, modelKey, strapi }) => {
         .sort(filters.sort)
         .skip(filters.start)
         .limit(filters.limit)
-        .populate(populate || defaultPopulate);
+        .populate(populate || defaultPopulate);*/
     },
 
     countSearch(params) {
-      const $or = buildSearchOr(model, params._q);
-      return model.find({ $or }).countDocuments();
+      return module.exports.count(params);
+/*      const $or = buildSearchOr(model, params._q);
+      return model.find({ $or }).countDocuments();*/
     },
   };
 };
 
-const buildSearchOr = (model, query) => {
+/*const buildSearchOr = (model, query) => {
   return Object.keys(model.attributes).reduce((acc, curr) => {
     switch (model.attributes[curr].type) {
       case 'integer':
@@ -152,4 +172,4 @@ const buildSearchOr = (model, query) => {
         return acc;
     }
   }, []);
-};
+};*/
