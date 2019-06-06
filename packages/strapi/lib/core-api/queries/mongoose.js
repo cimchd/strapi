@@ -1,7 +1,7 @@
 const _ = require('lodash');
 const { convertRestQueryParams, buildQuery } = require('strapi-utils');
 
-module.exports = ({ model, modelKey, strapi }) => {
+module.exports = ({ model, strapi }) => {
   const assocs = model.associations.map(ast => ast.alias);
 
   const defaultPopulate = model.associations
